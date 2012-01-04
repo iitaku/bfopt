@@ -1,4 +1,4 @@
-all: bfopt llvm_test
+all: bfopt
 
 bfopt: bfopt.cmx
 	ocamlfind ocamlopt -package llvm.analysis,llvm.executionengine -linkpkg -o $@ $<
@@ -15,4 +15,4 @@ llvm_test: llvm_test.cmx
 .PHONY: clean
 
 clean:
-	rm -f *.cm* *.o bfopt llvm_test
+	rm -f *.cm* *.o bfopt llvm_test 

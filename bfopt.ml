@@ -11,6 +11,42 @@ let load file_name =
         | _  -> List.hd line ^ "\n" ^ load_sub fin in
     load_sub (open_in file_name)
 
+let find_ljmp insts ip = 
+  let rec find_ljmp_sub depth insts ip = 
+    (match depth, insts.[ip] with
+      | (0, '[') -> ip
+      | (_, ']') -> find_ljmp_sub (depth+1) insts (ip-1)
+      | (_, '[') -> find_ljmp_sub (depth-1) insts (ip-1)
+      | (_,  _ ) -> find_ljmp_sub  depth    insts (ip-1)) in
+  find_ljmp_sub 0 insts ip
+let rec find_rjmp insts ip =
+  let rec find_rjmp_sub depth insts ip = 
+    (match depth, insts.[ip] with
+      | (0, ']') -> ip
+      | (_, '[') -> find_rjmp_sub (depth+1) insts (ip+1)
+      | (_, ']') -> find_rjmp_sub (depth-1) insts (ip+1)
+      | (_,  _ ) -> find_rjmp_sub  depth    insts (ip+1)) in
+  find_rjmp_sub 0 insts ip
+
+(*****************
+ ** Interpreter **
+ *****************)
+(** interpreter **)
+let rec interp_script insts ip stack sp =
+ match insts.[ip] with
+    | '>' -> interp_script insts (ip+1) stack (sp+1)
+    | '<' -> interp_script insts (ip+1) stack (sp-1)
+    | '+' -> (stack.(sp) <- stack.(sp) + 1; interp_script insts (ip+1) stack sp)
+    | '-' -> (stack.(sp) <- stack.(sp) - 1; interp_script insts (ip+1) stack sp)
+    | '.' -> (print_char (Char.chr stack.(sp)); flush_all (); interp_script insts (ip+1) stack sp)
+    | ',' -> (stack.(sp) <- (Char.code (input_char stdin)); interp_script insts (ip+1) stack sp)
+    | '[' -> (match stack.(sp) with
+               | 0 -> interp_script insts ((find_rjmp insts (ip+1))+1) stack sp
+               | _ -> interp_script insts (ip+1) stack sp)
+    | ']' -> (match stack.(sp) with
+               | 0 -> interp_script insts (ip+1) stack sp
+               | _ -> interp_script insts ((find_ljmp insts (ip-1))+1) stack sp)
+    |  _  -> interp_script insts (ip+1) stack sp
 
 (***********************
  ** IR VirstualMachine **
@@ -34,7 +70,7 @@ let insts2irs insts =
     | (NOP, rhs) -> Some rhs
     | (lhs, NOP) -> Some lhs
     | _ -> None in
-  let find_ljmp irs irp = 
+  let find_ljmp_ir irs irp = 
     let rec find_ljmp_sub depth irs irp = 
       match (depth, irs.(irp)) with
         | (0, LJMP _) -> irp
@@ -42,7 +78,7 @@ let insts2irs insts =
         | (_, RJMP _) -> find_ljmp_sub (depth+1) irs (irp+1)
         | (_, _)      -> find_ljmp_sub (depth) irs (irp+1) in
     find_ljmp_sub 0 irs irp in
-  let find_rjmp irs irp = 
+  let find_rjmp_ir irs irp = 
     let rec find_rjmp_sub depth irs irp = 
       match (depth, irs.(irp)) with
         | (0, RJMP _) -> irp
@@ -53,8 +89,8 @@ let insts2irs insts =
   let rec resolve irs irp = 
     if irp = (Array.length irs) then irs else
     match irs.(irp) with
-      | RJMP None -> (irs.(irp) <- RJMP (Some (find_ljmp irs (irp+1))); resolve irs (irp+1))
-      | LJMP None -> (irs.(irp) <- LJMP (Some (find_rjmp irs (irp-1))); resolve irs (irp+1))
+      | RJMP None -> (irs.(irp) <- RJMP (Some (find_ljmp_ir irs (irp+1))); resolve irs (irp+1))
+      | LJMP None -> (irs.(irp) <- LJMP (Some (find_rjmp_ir irs (irp-1))); resolve irs (irp+1))
       | _         -> resolve irs (irp+1) in
   let rec convert insts ip irs = 
     if ip = (String.length insts) then irs else
@@ -66,52 +102,140 @@ let insts2irs insts =
   let obverse_irs = List.rev reverse_irs in 
   resolve (Array.of_list obverse_irs) 0
 
-let hello = "+++++++++[>++++++++>+++++++++++>+++++<<<-]>.>++.+++++++..+++.>-.------------.<++++++++.--------.+++.------.--------.>+."
-let test = "[++++>++++>]"
+let rec interp_ir irs irp stack sp = 
+  match irs.(irp) with
+    | SHFT n -> interp_ir irs (irp+1) stack (sp+n)
+    | VARY n -> (stack.(sp) <- stack.(sp) + n; interp_ir irs (irp+1) stack sp)
+    | WRTE   -> (print_char (Char.chr stack.(sp)); flush_all (); interp_ir irs (irp+1) stack sp)
+    | READ   -> (stack.(sp) <- (Char.code (input_char stdin)); interp_ir irs (irp+1) stack sp)
+    | RJMP Some n -> (match stack.(sp) with
+                  | 0 -> interp_ir irs (n+1) stack sp
+                  | _ -> interp_ir irs (irp+1) stack sp)
+    | LJMP Some n -> interp_ir irs n stack sp
+    | NOP    -> interp_ir irs (irp+1) stack sp
+    | _      -> invalid_arg "invalid IR"
 
-(*****************
- ** Interpreter **
- *****************)
+(******************************
+ ** LLVM JIT Compile and Run **
+ ******************************)
+type ast_t = Node of (ast_t * ast_t * ast_t) | Leaf of ir_t array
 
-(** interpreter **)
-let rec interp insts ip stack sp =
-  let find_ljmp insts ip = 
-    let rec find_ljmp_sub cnt insts ip = 
-      (match cnt, insts.[ip] with
-        | (0, '[') -> ip
-        | (_, ']') -> find_ljmp_sub (cnt+1) insts (ip-1)
-        | (_, '[') -> find_ljmp_sub (cnt-1) insts (ip-1)
-        | (_,  _ ) -> find_ljmp_sub  cnt    insts (ip-1)) in
-    find_ljmp_sub 0 insts ip in
-  let rec find_rjmp insts ip =
-    let rec find_rjmp_sub cnt insts ip = 
-      (match cnt, insts.[ip] with
-        | (0, ']') -> ip
-        | (_, '[') -> find_rjmp_sub (cnt+1) insts (ip+1)
-        | (_, ']') -> find_rjmp_sub (cnt-1) insts (ip+1)
-        | (_,  _ ) -> find_rjmp_sub  cnt    insts (ip+1)) in
-    find_rjmp_sub 0 insts ip in
-  match insts.[ip] with
-    | '>' -> interp insts (ip+1) stack (sp+1)
-    | '<' -> interp insts (ip+1) stack (sp-1)
-    | '+' -> let s = stack.(sp) + 1 in 
-                (stack.(sp) <- s; interp insts (ip+1) stack sp)
-    | '-' -> let s = stack.(sp) - 1 in 
-                (stack.(sp) <- s; interp insts (ip+1) stack sp)
-    | '.' -> let s = stack.(sp) in
-                (print_char (Char.chr s); flush_all (); interp insts (ip+1) stack sp)
-    | ',' -> let s = Char.code (input_char stdin) in 
-                (stack.(sp) <- s; interp insts (ip+1) stack sp)
-    | '[' -> (match stack.(sp) with
-                | 0 -> interp insts ((find_rjmp insts (ip+1))+1) stack sp
-                | _ -> interp insts (ip+1) stack sp)
-    | ']' -> (match stack.(sp) with
-                | 0 -> interp insts (ip+1) stack sp
-                | _ -> interp insts ((find_ljmp insts (ip-1))+1) stack sp)
-    |  _  -> interp insts (ip+1) stack sp
+open Llvm
+
+module E = Llvm_executionengine
+
+let compile_and_run script = 
+  (* init *)
+  let _ = E.initialize_native_target () in
+  let c = global_context () in
+  let m = create_module c "bf_module" in
+  let b = builder c in
+  let e = E.ExecutionEngine.create_jit m 3 in
+  (* bind type *)
+  let i1_t = i1_type c in
+  let i8_t = i8_type c in
+  let i32_t = i32_type c in
+  let void_t = void_type c in
+  (* external func *)
+  let getchar = declare_function "getchar" (function_type i32_t [||]) m in
+  let putchar = declare_function "putchar" (function_type i32_t [| i8_t |]) m in
+  let memset = declare_function "llvm.memset.p0i8.i32" (function_type void_t [| pointer_type i8_t; i8_t; i32_t; i32_t; i1_t |]) m in
+  (* internal func *)
+  let bfengine = declare_function "bfengine" (function_type void_t [| i32_t |]) m in
+  (* impl *)
+  let bb = append_block c "" bfengine in
+  let () = position_at_end bb b in
+  let param = match params bfengine with
+    | [| p |] -> p
+    | _ -> assert false in
+  let llstack = build_array_alloca i8_t param "stack" b in
+  let _ = build_call memset [|llstack; const_int i8_t 0; param; const_int i32_t 16; const_int i1_t 0|] "" b in
+  let llsp = build_alloca i32_t "sp" b in
+  let _ = build_store (const_int i32_t 0) llsp b in
+  let parse script = 
+    let rec construct script snipped pos len1 =
+      if len1 = pos then Leaf (insts2irs snipped) else
+      match script.[pos] with
+        | '[' -> 
+          let mark = (find_rjmp script (pos+1)) in
+          let len2 = mark - (pos+1) in
+          let len3 = len1 - (mark+1) in
+          let ast1 = Leaf (insts2irs snipped) in
+          let ast2 = construct (String.sub script (pos+1) len2) "" 0 len2 in
+          let ast3 = construct (String.sub script (mark+1) len3) "" 0 len3 in
+          Node (ast1, ast2, ast3)
+        | ']' -> assert false
+        |  i  -> construct script (snipped ^ (Char.escaped i)) (pos+1) len1 in
+    construct script "" 0 (String.length script) in
+  let rec codegen irs irp len = 
+    if irp = len then () else
+    match irs.(irp) with
+      | SHFT n -> 
+        let v1 = build_load llsp "" b in
+        let v2 = build_add v1 (const_int i32_t n) "" b in
+        let _ = build_store v2 llsp b in
+        codegen irs (irp+1) len
+      | VARY n -> 
+        let p = build_gep llstack [| build_load llsp "" b |] "" b in
+        let v1 = build_load p "" b in
+        let v2 = build_add v1 (const_int i8_t n) "" b in
+        let _ = build_store v2 p b in
+        codegen irs (irp+1) len
+      | WRTE   -> 
+        let p = build_gep llstack [| build_load llsp "" b |] "" b in
+        let v = build_load p "" b in
+        let _ = build_call putchar [| v |] "" b in
+        codegen irs (irp+1) len
+      | READ   -> 
+        let v1 = build_call getchar [||] "" b in
+        let v2 = build_trunc_or_bitcast v1 i8_t "" b in
+        let p = build_gep llstack [| build_load llsp "" b |] "" b in
+        let _ = build_store v2 p b in
+        codegen irs (irp+1) len
+      | NOP    -> codegen irs (irp+1) len
+      | _      -> invalid_arg "invalid IR" in
+  let rec traverse = function
+      | Node (node1, node2, node3) ->
+        (* blocks *)
+        let bb1 = append_block c "" bfengine in
+        let bb2 = append_block c "" bfengine in
+        let bb3 = append_block c "" bfengine in
+        
+        (* before loop  *)
+        let _ = traverse node1 in
+        let _ = build_br bb1 b in
+               
+        (* loop header *)
+        let () = position_at_end bb1 b in
+        let v1 = const_int i8_t 0 in
+        let p = build_gep llstack [| build_load llsp "" b |] "" b in
+        let v2 = build_load p "" b in
+        let cond = build_icmp Icmp.Ne v1 v2 "" b in
+        let _ = build_cond_br cond bb2 bb3 b in
+     
+        (* loop body *)
+        let () = position_at_end bb2 b in
+        let _ = traverse node2 in
+        let _ = build_br bb1 b in
+        
+        (* after loop *)
+        let () = position_at_end bb3 b in
+        let _ = traverse node3 in
+        ()
+      | Leaf irs -> codegen irs 0 (Array.length irs) in
+  let () = traverse (parse script) in
+  let _ = build_ret_void b in
+  (* dump and test *)
+  let () = dump_value bfengine in
+  (*
+  let () = Llvm_analysis.assert_valid_function bfengine in
+  *)
+  let _  = E.ExecutionEngine.run_function bfengine [| E.GenericValue.of_int i32_t 30000 |] e in
+  E.ExecutionEngine.dispose e
 
 (** brainfuck **)
-let brainfuck file_name = try interp (load file_name) 0 (Array.make 30000 0) 0 with Invalid_argument "index out of bounds" -> ()
+(*let brainfuck file_name = try interp_ir (insts2irs (load file_name)) 0 (Array.make 30000 0) 0 with Invalid_argument "index out of bounds" -> ()*)
+let brainfuck file_name = compile_and_run (load file_name)
     
 (** main **)
 let () = match Array.length Sys.argv with
