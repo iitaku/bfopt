@@ -2,7 +2,6 @@
  ** Common **
  ************)
 
-(** load file **)
 let load file_name = 
   let rec load_sub fin = 
     let line = try [input_line fin] with End_of_file -> [] in
@@ -31,7 +30,6 @@ let rec find_rjmp insts ip =
 (*****************
  ** Interpreter **
  *****************)
-(** interpreter **)
 let rec interp_script insts ip stack sp =
  match insts.[ip] with
     | '>' -> interp_script insts (ip+1) stack (sp+1)
@@ -219,26 +217,25 @@ let compile_and_run script =
         let bb3 = append_block c "" bfengine in
         
         (* before loop  *)
-        let _ = traverse node1 in
-        let _ = build_br bb1 b in
+        traverse node1;
+        ignore (build_br bb1 b);
                
         (* loop header *)
-        let () = position_at_end bb1 b in
+        position_at_end bb1 b;
         let v1 = const_int i8_t 0 in
         let p = build_gep llstack [| build_load llsp "" b |] "" b in
         let v2 = build_load p "" b in
         let cond = build_icmp Icmp.Ne v1 v2 "" b in
-        let _ = build_cond_br cond bb2 bb3 b in
+        ignore (build_cond_br cond bb2 bb3 b);
      
         (* loop body *)
-        let () = position_at_end bb2 b in
-        let _ = traverse node2 in
-        let _ = build_br bb1 b in
+        position_at_end bb2 b;
+        traverse node2;
+        ignore (build_br bb1 b);
         
         (* after loop *)
-        let () = position_at_end bb3 b in
-        let _ = traverse node3 in
-        ()
+        position_at_end bb3 b;
+        traverse node3;
       | Leaf irs -> codegen irs 0 (Array.length irs) in
   
   (* JIT compile *)
@@ -254,7 +251,7 @@ let compile_and_run script =
   ignore (PassManager.run_function bfengine fpm);
   
   (* dump and test *)
-  (*dump_value bfengine;*)
+  dump_value bfengine;
   Llvm_analysis.assert_valid_function bfengine;
     
   (* execution *)
@@ -272,6 +269,7 @@ let brainfuck file_name = try interp_ir (insts2irs (load file_name)) 0 (Array.ma
 let brainfuck file_name = compile_and_run (load file_name)
     
 (** main **)
-let () = match Array.length Sys.argv with
-           | 2 -> brainfuck (Sys.argv.(1))
-           | _ -> invalid_arg "./bfopt [script.b]"
+let () = 
+  match Array.length Sys.argv with
+    | 2 -> brainfuck (Sys.argv.(1))
+    | _ -> invalid_arg "./bfopt [script.b]"
