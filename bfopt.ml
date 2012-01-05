@@ -123,35 +123,48 @@ type ast_t = Node of (ast_t * ast_t * ast_t) | Leaf of ir_t array
 open Llvm
 
 module E = Llvm_executionengine
+module T = Llvm_target
+module S = Llvm_scalar_opts
 
 let compile_and_run script = 
+  
   (* init *)
-  let _ = E.initialize_native_target () in
+  ignore (E.initialize_native_target ());
   let c = global_context () in
   let m = create_module c "bf_module" in
   let b = builder c in
-  let e = E.ExecutionEngine.create_jit m 3 in
+  let e = E.ExecutionEngine.create m in
+  
   (* bind type *)
   let i1_t = i1_type c in
   let i8_t = i8_type c in
   let i32_t = i32_type c in
   let void_t = void_type c in
+  
   (* external func *)
   let getchar = declare_function "getchar" (function_type i32_t [||]) m in
   let putchar = declare_function "putchar" (function_type i32_t [| i8_t |]) m in
   let memset = declare_function "llvm.memset.p0i8.i32" (function_type void_t [| pointer_type i8_t; i8_t; i32_t; i32_t; i1_t |]) m in
+  
   (* internal func *)
   let bfengine = declare_function "bfengine" (function_type void_t [| i32_t |]) m in
-  (* impl *)
+  
+  (* entry point *)
   let bb = append_block c "" bfengine in
-  let () = position_at_end bb b in
+  position_at_end bb b;
+
+  (* initialize stack *)
   let param = match params bfengine with
     | [| p |] -> p
     | _ -> assert false in
   let llstack = build_array_alloca i8_t param "stack" b in
-  let _ = build_call memset [|llstack; const_int i8_t 0; param; const_int i32_t 16; const_int i1_t 0|] "" b in
+  ignore (build_call memset [|llstack; const_int i8_t 0; param; const_int i32_t 16; const_int i1_t 0|] "" b);
+
+  (* initialize stack pointer *)
   let llsp = build_alloca i32_t "sp" b in
-  let _ = build_store (const_int i32_t 0) llsp b in
+  ignore (build_store (const_int i32_t 0) llsp b);
+  
+  (* parser *)
   let parse script = 
     let rec construct script snipped pos len1 =
       if len1 = pos then Leaf (insts2irs snipped) else
@@ -167,6 +180,8 @@ let compile_and_run script =
         | ']' -> assert false
         |  i  -> construct script (snipped ^ (Char.escaped i)) (pos+1) len1 in
     construct script "" 0 (String.length script) in
+  
+  (* code generator *)
   let rec codegen irs irp len = 
     if irp = len then () else
     match irs.(irp) with
@@ -194,6 +209,8 @@ let compile_and_run script =
         codegen irs (irp+1) len
       | NOP    -> codegen irs (irp+1) len
       | _      -> invalid_arg "invalid IR" in
+  
+  (* traverse AST *)
   let rec traverse = function
       | Node (node1, node2, node3) ->
         (* blocks *)
@@ -223,18 +240,35 @@ let compile_and_run script =
         let _ = traverse node3 in
         ()
       | Leaf irs -> codegen irs 0 (Array.length irs) in
-  let () = traverse (parse script) in
-  let _ = build_ret_void b in
+  
+  (* JIT compile *)
+  traverse (parse script);
+  ignore (build_ret_void b);
+  (*dump_value bfengine;*)
+  
+  (* optimize *)
+  let fpm = PassManager.create_function m in
+  T.TargetData.add (E.ExecutionEngine.target_data e) fpm;
+  S.add_scalar_repl_aggregation_ssa fpm; (*30*)
+  ignore (PassManager.initialize fpm);
+  ignore (PassManager.run_function bfengine fpm);
+  
   (* dump and test *)
-  let () = dump_value bfengine in
-  (*
-  let () = Llvm_analysis.assert_valid_function bfengine in
-  *)
-  let _  = E.ExecutionEngine.run_function bfengine [| E.GenericValue.of_int i32_t 30000 |] e in
+  (*dump_value bfengine;*)
+  Llvm_analysis.assert_valid_function bfengine;
+    
+  (* execution *)
+  ignore (E.ExecutionEngine.run_function bfengine [| E.GenericValue.of_int i32_t 30000 |] e);
+  
+  (* finalize *)
   E.ExecutionEngine.dispose e
+  ;;
 
 (** brainfuck **)
-(*let brainfuck file_name = try interp_ir (insts2irs (load file_name)) 0 (Array.make 30000 0) 0 with Invalid_argument "index out of bounds" -> ()*)
+(*
+let brainfuck file_name = try interp_script (load file_name) 0 (Array.make 30000 0) 0 with Invalid_argument "index out of bounds" -> ()
+let brainfuck file_name = try interp_ir (insts2irs (load file_name)) 0 (Array.make 30000 0) 0 with Invalid_argument "index out of bounds" -> ()
+*)
 let brainfuck file_name = compile_and_run (load file_name)
     
 (** main **)
