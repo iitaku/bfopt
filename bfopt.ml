@@ -137,6 +137,8 @@ let compile_and_run script =
   let i1_t = i1_type c in
   let i8_t = i8_type c in
   let i32_t = i32_type c in
+  let i64_t = i64_type c in
+  let sp_t = pointer_type i8_t in
   let void_t = void_type c in
   
   (* external func *)
@@ -159,8 +161,8 @@ let compile_and_run script =
   ignore (build_call memset [|llstack; const_int i8_t 0; param; const_int i32_t 16; const_int i1_t 0|] "" b);
 
   (* initialize stack pointer *)
-  let llsp = build_alloca i32_t "sp" b in
-  ignore (build_store (const_int i32_t 0) llsp b);
+  let llsp = build_alloca sp_t "sp" b in
+  ignore (build_store llstack llsp b);
   
   (* parser *)
   let parse script = 
@@ -185,24 +187,26 @@ let compile_and_run script =
     match irs.(irp) with
       | SHFT n -> 
         let v1 = build_load llsp "" b in
-        let v2 = build_add v1 (const_int i32_t n) "" b in
-        let _ = build_store v2 llsp b in
+        let v2 = build_ptrtoint v1 i64_t "" b in
+        let v3 = build_add v2 (const_int i64_t (n*8)) "" b in
+        let v4 = build_inttoptr v3 sp_t "" b in
+        let _ = build_store v4 llsp b in
         codegen irs (irp+1) len
       | VARY n -> 
-        let p = build_gep llstack [| build_load llsp "" b |] "" b in
+        let p = build_load llsp "" b in
         let v1 = build_load p "" b in
         let v2 = build_add v1 (const_int i8_t n) "" b in
         let _ = build_store v2 p b in
         codegen irs (irp+1) len
       | WRTE   -> 
-        let p = build_gep llstack [| build_load llsp "" b |] "" b in
+        let p = build_load llsp "" b in
         let v = build_load p "" b in
         let _ = build_call putchar [| v |] "" b in
         codegen irs (irp+1) len
       | READ   -> 
         let v1 = build_call getchar [||] "" b in
         let v2 = build_trunc_or_bitcast v1 i8_t "" b in
-        let p = build_gep llstack [| build_load llsp "" b |] "" b in
+        let p = build_load llsp "" b in
         let _ = build_store v2 p b in
         codegen irs (irp+1) len
       | NOP    -> codegen irs (irp+1) len
@@ -223,7 +227,7 @@ let compile_and_run script =
         (* loop header *)
         position_at_end bb1 b;
         let v1 = const_int i8_t 0 in
-        let p = build_gep llstack [| build_load llsp "" b |] "" b in
+        let p = build_load llsp "" b in
         let v2 = build_load p "" b in
         let cond = build_icmp Icmp.Ne v1 v2 "" b in
         ignore (build_cond_br cond bb2 bb3 b);
@@ -251,7 +255,7 @@ let compile_and_run script =
   ignore (PassManager.run_function bfengine fpm);
   
   (* dump and test *)
-  dump_value bfengine;
+  (*dump_value bfengine;*)
   Llvm_analysis.assert_valid_function bfengine;
     
   (* execution *)
