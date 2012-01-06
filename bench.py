@@ -1,6 +1,7 @@
 #! /usr/bin/env python
 # -*- coding: utf-8 -*-
 
+import os
 import sys
 import subprocess
 import tempfile
@@ -1062,30 +1063,46 @@ factor = '''
 ++++++++++.
 '''
 
-hello='''
-+++++++++[>++++++++>+++++++++++>+++++<<<-]>.>++.+++++++..+++.>-.
-------------.<++++++++.--------.+++.------.--------.>+.
-'''
+iter_num = 5
 
-#source_list = [mandelbrot, hanoi, factor]
-#stdin_list = ["", "", "12"]
-bench_list = {mandelbrot:'\n', factor:'12\n'}
-
-def exec_bf(src, stdin):
+def exec_bf(precmd, src, postcmd, stdin):
     src_name = tempfile.mkstemp()[1]
     src_file = open(src_name, 'w')
     src_file.write(src)
     src_file.close()
-    #cmd = "time ./bfopt " + src + " > /dev/null"
-    cmd = "time ./bfopt " + src_name
-    p = subprocess.Popen(cmd, shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-    return p.communicate(stdin)[0]
+    cmd = ' '.join([precmd, src_name + postcmd])
+    p = subprocess.Popen(cmd, shell=True, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    (stdout, stderr) = p.communicate(input=stdin)
+    p.stdin.close()
+    return (stdout, stderr)
 
-def bench():
-    
-    for (src, stdin) in bench_list.iteritems():
-        out = exec_bf(src, stdin)
-        print out
+def test(user):
+    return '24: 2 2 2 3' == exec_bf(user+'/bfopt', factor, '', '24\n')[0].strip()
+
+def bench(user):
+    result = ''
+    problems = {mandelbrot:'\n', hanoi:'\n', factor:'91827436571\n'}
+    total_score = 0.0
+    for (src, stdin) in problems.iteritems():
+        sum_time = 0.0
+        for i in range(iter_num):
+            (stdout, stderr) = exec_bf('/usr/bin/time -p '+user+'/bfopt', src, '>/dev/null', stdin)
+            time = float(stderr.split('\n')[1].strip().split(' ')[-1])
+            sum_time += time
+        score = (1.0 / sum_time) * 1000
+        total_score += score
+        result += str(score)+','
+    result += str(total_score)
+    return result
 
 if '__main__' == __name__:
-    bench()
+    result = open('result.csv', 'w')
+    users = filter(lambda x : not os.path.isfile(x), os.listdir('.'))
+    for user in users:
+        result.write(user+',')
+        if (test(user)):
+            result.write('OK,')
+            result.write(bench(user))
+        else:
+            result.write('NG,')
+    result.close
